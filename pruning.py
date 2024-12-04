@@ -60,31 +60,62 @@ def prune(weight, rate):
 
 
 
-def reshape_layer(next_layer, remaining_idx, prev_size):
+def reshape_layer(next_layer_tensor, remaining_idx, prev_size):
+    weight = next_layer_tensor.data
 
-    weight = next_layer.data
-    if len(remaining_idx) >= weight.shape[1]:
-        return next_layer
-    weight = weight[:, remaining_idx, :, :]
-    next_layer.in_channels = prev_size[0]
+    if isinstance(remaining_idx, int):
+        remaining_idx = [remaining_idx]  
+    elif isinstance(remaining_idx, torch.Tensor):
+        remaining_idx = remaining_idx.tolist() 
+
+
+    if len(weight.shape) > 1:
+        in_features = weight.shape[1]  
+    else:
+        in_features = weight.shape[0]  
+   
+
+   
+    remaining_idx = [idx for idx in remaining_idx if idx < in_features]
+
+ 
+    if len(remaining_idx) >= in_features:
+        return next_layer_tensor
+
     
-    return next_layer
+    if len(weight.shape) > 1:  
+        reshaped_tensor = weight[:, remaining_idx, :, :]
+    else:  
+        reshaped_tensor = weight[remaining_idx]
+    return reshaped_tensor
 
 new_state_dict = state_dict
 key_list = list(state_dict.keys())
+new_state_dict = OrderedDict()
 cnt = 0
-no_prune = ['act', 'bn']
+no_prune = ['running_mean', 'running_var' , 'num_batches_tracked']
 while cnt < len(key_list):
     key = key_list[cnt]
-    if 'conv' in key and len(state_dict[key].shape) >3:
-        pruned_weight, remaining_idx = prune(state_dict[key], 0.3)
-        cnt += 1
-        while any(item in key_list[cnt] for item in no_prune) and '24' not in key_list[cnt]:
+
+    if 'conv' in key and len(state_dict[key].shape) > 3:
+        pruned_weight, remaining_idx = prune(state_dict[key], 0.3)  # Prune the layer weights
+
+
+        new_state_dict[key] = pruned_weight
+
+        while cnt + 1 < len(key_list) and  not any(item in key_list[cnt] for item in no_prune) and '24' not in key_list[cnt + 1]:
             cnt += 1
+            print('before', state_dict[key_list[cnt]].data.shape)
+            reshaped_tensor = reshape_layer(state_dict[key_list[cnt]], remaining_idx, pruned_weight.shape)
+            new_state_dict[key_list[cnt]] = reshaped_tensor
+            print('after ', new_state_dict[key_list[cnt]].data.shape)
+
         is_last = '24' in key_list[cnt]
-        new_state_dict[key] = reshape_layer(state_dict[key_list[cnt]], remaining_idx, pruned_weight.shape)
         if is_last:
-            cnt = len(key_list)+100
+            break  
     else:
-        cnt += 1
+
+        new_state_dict[key] = state_dict[key]
+
+    cnt += 1
 torch.save(new_state_dict, 'pruned.pt')
